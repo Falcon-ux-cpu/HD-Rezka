@@ -35,13 +35,18 @@ HEADERS = {
 
 session = requests.Session(impersonate="chrome120")
 
-# --- РАБОТА С GIST ---
+# --- РАБОТА С GIST API ---
 def get_gist_data():
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GIST_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {GIST_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "HDRezka-Parser-App"
+    }
     res = requests.get(url, headers=headers)
     if res.status_code != 200:
-        raise Exception(f"Ошибка получения Gist: {res.status_code}")
+        raise Exception(f"Ошибка получения Gist: {res.status_code} | Ответ: {res.text}")
+    
     files = res.json()["files"]
     
     watchlist = json.loads(files["watchlist.json"]["content"]) if "watchlist.json" in files else []
@@ -50,7 +55,11 @@ def get_gist_data():
 
 def update_gist_data(watchlist, state):
     url = f"https://api.github.com/gists/{GIST_ID}"
-    headers = {"Authorization": f"token {GIST_TOKEN}"}
+    headers = {
+        "Authorization": f"Bearer {GIST_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "HDRezka-Parser-App"
+    }
     payload = {
         "files": {
             "watchlist.json": {"content": json.dumps(watchlist, ensure_ascii=False, indent=2)},
@@ -61,7 +70,7 @@ def update_gist_data(watchlist, state):
     if res.status_code == 200:
         print("-> Данные Gist успешно сохранены.")
     else:
-        print(f"-> Ошибка сохранения Gist: {res.status_code}")
+        print(f"-> Ошибка сохранения Gist: {res.status_code} | Ответ: {res.text}")
 
 # --- ПРОВЕРКА ПОЧТЫ (IMAP ИЗ ЯРЛЫКА rezka) ---
 def process_incoming_emails(watchlist, state):
@@ -70,17 +79,14 @@ def process_incoming_emails(watchlist, state):
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         
-        # Переход в папку ярлыка rezka (с обработкой кавычек для IMAP)
         status, _ = mail.select('"rezka"')
         if status != 'OK':
-            # Фоллбэк, если ярлык вложен в INBOX
             status, _ = mail.select('"INBOX/rezka"')
             if status != 'OK':
-                print("❌ Ошибка: Папка/ярлык 'rezka' не найдена в Gmail.")
+                print("❌ Ошибка: Ярлык/папка 'rezka' не найдена.")
                 mail.logout()
                 return watchlist, state, removed_titles
 
-        # Ищем только непрочитанные письма, отправленные С ВАШЕГО ЛИЧНОГО адреса
         status, messages = mail.search(None, f'(UNSEEN FROM "{TARGET_EMAIL}")')
         email_ids = messages[0].split()
 
@@ -110,7 +116,7 @@ def process_incoming_emails(watchlist, state):
                         for item in lines:
                             if item not in watchlist:
                                 watchlist.append(item)
-                                print(f"Добавлено из письма (ярлык rezka): {item}")
+                                print(f"Добавлено из письма: {item}")
                     
                     elif subject == "HDREZKA_REMOVE":
                         for item in lines:
@@ -119,7 +125,7 @@ def process_incoming_emails(watchlist, state):
                                 removed_titles.append(f'"{item}" (по вашей команде)')
                                 if item in state:
                                     del state[item]
-                                print(f"Удалено из письма (ярлык rezka): {item}")
+                                print(f"Удалено из письма: {item}")
 
                     mail.store(e_id, '+FLAGS', '\\Seen')
 
@@ -129,7 +135,7 @@ def process_incoming_emails(watchlist, state):
 
     return watchlist, state, removed_titles
 
-# --- ПАРСИНГ СТРАНИЦЫ HDREZKA ---
+# --- ПАРСИНГ HDREZKA ---
 def check_hdrezka(title):
     search_url = f"{BASE_URL}/engine/ajax/search.php"
     payload = {"q": title}
