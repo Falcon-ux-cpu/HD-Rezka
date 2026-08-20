@@ -14,8 +14,13 @@ from curl_cffi import requests
 # --- СЕКРЕТЫ И НАСТРОЙКИ ---
 GIST_TOKEN = os.environ.get("GHOST_GIST_TOKEN")
 GIST_ID = os.environ.get("GIST_ID")
+
+# Аккаунт-бот (отправитель / проверяемый ящик)
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
+
+# Ваш личный адрес (получатель уведомлений / автор писем управления)
+TARGET_EMAIL = os.environ.get("TARGET_EMAIL")
 
 BASE_URL = "https://hdrezka.ag"
 IMAP_SERVER = "imap.gmail.com"
@@ -66,7 +71,8 @@ def process_incoming_emails(watchlist, state):
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select("inbox")
 
-        status, messages = mail.search(None, f'(UNSEEN FROM "{GMAIL_USER}")')
+        # Ищем только непрочитанные письма, отправленные С ВАШЕГО ЛИЧНОГО адреса
+        status, messages = mail.search(None, f'(UNSEEN FROM "{TARGET_EMAIL}")')
         email_ids = messages[0].split()
 
         for e_id in email_ids:
@@ -114,7 +120,7 @@ def process_incoming_emails(watchlist, state):
 
     return watchlist, state, removed_titles
 
-# --- ПАРСИНГ СТАНИЦЫ HDREZKA ---
+# --- ПАРСИНГ СТРАНИЦЫ HDREZKA ---
 def check_hdrezka(title):
     search_url = f"{BASE_URL}/engine/ajax/search.php"
     payload = {"q": title}
@@ -122,7 +128,6 @@ def check_hdrezka(title):
     headers["X-Requested-With"] = "XMLHttpRequest"
 
     try:
-        # Микропауза перед запросом поиска
         time.sleep(2)
         res = session.post(search_url, data=payload, headers=headers, timeout=15)
         if res.status_code != 200:
@@ -139,7 +144,6 @@ def check_hdrezka(title):
 
         page_url = link_elem["href"]
         
-        # Микропауза перед переходом на страницу тайтла
         time.sleep(2)
         page_res = session.get(page_url, headers=HEADERS, timeout=15)
         if page_res.status_code != 200:
@@ -147,7 +151,6 @@ def check_hdrezka(title):
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
         
-        # Точный извлекатель названий по твоим селекторам
         ru_title_elem = page_soup.find("h1", itemprop="name")
         ru_title = ru_title_elem.text.strip() if ru_title_elem else title
         
@@ -186,7 +189,7 @@ def check_hdrezka(title):
             is_awaiting = awaiting_elem and "Ожидаем фильм" in awaiting_elem.text
 
             if is_awaiting:
-                return None  # В хорошем качестве еще нет
+                return None
 
             translator_elem = page_soup.find("li", class_="b-translator__item active") or page_soup.find("li", class_="b-translator__item")
             translator_str = translator_elem.text.strip() if translator_elem else "Дубляж / Лицензия"
@@ -209,7 +212,7 @@ def send_email(updates, removed):
 
     msg = MIMEMultipart()
     msg["From"] = GMAIL_USER
-    msg["To"] = GMAIL_USER
+    msg["To"] = TARGET_EMAIL  # Отправляем на ваш личный ящик
     msg["Subject"] = "HD REZKA"
 
     body_text = ""
@@ -230,8 +233,8 @@ def send_email(updates, removed):
     try:
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
-        print("-> Уведомление успешно отправлено на почту.")
+            server.sendmail(GMAIL_USER, TARGET_EMAIL, msg.as_string())
+        print(f"-> Уведомление успешно отправлено на адрес {TARGET_EMAIL}.")
     except Exception as e:
         print(f"Ошибка при отправке письма: {e}")
 
