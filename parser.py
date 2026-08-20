@@ -11,7 +11,7 @@ from email.mime.multipart import MIMEMultipart
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
-# --- КОНФИГУРАЦИЯ И СЕКРЕТЫ ---
+# --- СЕКРЕТЫ И НАСТРОЙКИ ---
 GIST_TOKEN = os.environ.get("GHOST_GIST_TOKEN")
 GIST_ID = os.environ.get("GIST_ID")
 GMAIL_USER = os.environ.get("GMAIL_USER")
@@ -30,7 +30,7 @@ HEADERS = {
 
 session = requests.Session(impersonate="chrome120")
 
-# --- РАБОТА С GIST API ---
+# --- РАБОТА С GIST ---
 def get_gist_data():
     url = f"https://api.github.com/gists/{GIST_ID}"
     headers = {"Authorization": f"token {GIST_TOKEN}"}
@@ -54,11 +54,11 @@ def update_gist_data(watchlist, state):
     }
     res = requests.patch(url, headers=headers, json=payload)
     if res.status_code == 200:
-        print("-> Данные Gist успешно обновлены.")
+        print("-> Данные Gist успешно сохранены.")
     else:
-        print(f"-> Ошибка обновления Gist: {res.status_code}")
+        print(f"-> Ошибка сохранения Gist: {res.status_code}")
 
-# --- ПРОВЕРКА ВХОДЯЩЕЙ ПОЧТЫ (IMAP) ---
+# --- ПРОВЕРКА ПОЧТЫ (IMAP) ---
 def process_incoming_emails(watchlist, state):
     removed_titles = []
     try:
@@ -66,7 +66,6 @@ def process_incoming_emails(watchlist, state):
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
         mail.select("inbox")
 
-        # Ищем только непрочитанные письма от вашего адреса
         status, messages = mail.search(None, f'(UNSEEN FROM "{GMAIL_USER}")')
         email_ids = messages[0].split()
 
@@ -76,13 +75,11 @@ def process_incoming_emails(watchlist, state):
                 if isinstance(response_part, tuple):
                     msg = email.message_from_bytes(response_part[1])
                     
-                    # Декодирование темы
                     subject, encoding = decode_header(msg["Subject"])[0]
                     if isinstance(subject, bytes):
                         subject = subject.decode(encoding or "utf-8")
                     subject = subject.strip()
 
-                    # Извлечение тела письма
                     body = ""
                     if msg.is_multipart():
                         for part in msg.walk():
@@ -109,16 +106,15 @@ def process_incoming_emails(watchlist, state):
                                     del state[item]
                                 print(f"Удалено из письма: {item}")
 
-                    # Помечаем письмо как прочитанное
                     mail.store(e_id, '+FLAGS', '\\Seen')
 
         mail.logout()
     except Exception as e:
-        print(f"Ошибка чтения почты: {e}")
+        print(f"Ошибка при обработке почты: {e}")
 
     return watchlist, state, removed_titles
 
-# --- ПАРСИНГ HDREZKA ---
+# --- ПАРСИНГ СТАНИЦЫ HDREZKA ---
 def check_hdrezka(title):
     search_url = f"{BASE_URL}/engine/ajax/search.php"
     payload = {"q": title}
@@ -126,6 +122,8 @@ def check_hdrezka(title):
     headers["X-Requested-With"] = "XMLHttpRequest"
 
     try:
+        # Микропауза перед запросом поиска
+        time.sleep(2)
         res = session.post(search_url, data=payload, headers=headers, timeout=15)
         if res.status_code != 200:
             return None
@@ -141,30 +139,30 @@ def check_hdrezka(title):
 
         page_url = link_elem["href"]
         
-        # Переход на страницу тайтла
-        time.sleep(1.5)
+        # Микропауза перед переходом на страницу тайтла
+        time.sleep(2)
         page_res = session.get(page_url, headers=HEADERS, timeout=15)
         if page_res.status_code != 200:
             return None
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
         
-        # Заголовок и оригинальное название
-        ru_title = link_elem.find("span", class_="enty").text.strip() if link_elem.find("span", class_="enty") else title
-        orig_title_elem = page_soup.find("div", class_="b-post__origtitle")
+        # Точный извлекатель названий по твоим селекторам
+        ru_title_elem = page_soup.find("h1", itemprop="name")
+        ru_title = ru_title_elem.text.strip() if ru_title_elem else title
+        
+        orig_title_elem = page_soup.find("div", class_="b-post__origtitle", itemprop="alternativeHeadline")
         orig_title = orig_title_elem.text.strip() if orig_title_elem else ""
         
         full_title = f"{ru_title} / {orig_title}" if orig_title else ru_title
 
         is_series = "/series/" in page_url or "/cartoons/" in page_url or page_soup.find("li", class_="b-simple_season__item")
 
-        # --- СКРИПТ ДЛЯ СЕРИАЛОВ ---
+        # Сериалы
         if is_series:
-            # Проверка статуса "Завершен"
             completed_elem = page_soup.find("div", class_="b-post__infolast")
             is_completed = completed_elem and "Завершен" in completed_elem.text
 
-            # Получение текущей серии и сезона
             season_elem = page_soup.find("li", class_="b-simple_season__item active")
             episode_elem = page_soup.find("li", class_="b-simple_episode__item active") or page_soup.find("li", class_="b-simple_episode__item")
             translator_elem = page_soup.find("li", class_="b-translator__item active") or page_soup.find("li", class_="b-translator__item")
@@ -182,13 +180,13 @@ def check_hdrezka(title):
                 "is_completed": is_completed
             }
 
-        # --- СКРИПТ ДЛЯ ФИЛЬМОВ ---
+        # Фильмы
         else:
             awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
             is_awaiting = awaiting_elem and "Ожидаем фильм" in awaiting_elem.text
 
             if is_awaiting:
-                return None  # Фильм ещё не вышел в хорошем качестве
+                return None  # В хорошем качестве еще нет
 
             translator_elem = page_soup.find("li", class_="b-translator__item active") or page_soup.find("li", class_="b-translator__item")
             translator_str = translator_elem.text.strip() if translator_elem else "Дубляж / Лицензия"
@@ -204,7 +202,7 @@ def check_hdrezka(title):
         print(f"Ошибка при парсинге '{title}': {e}")
         return None
 
-# --- ОТПРАВКА GMAIL (SMTP) ---
+# --- ОТПРАВКА ПИСЬМА (SMTP) ---
 def send_email(updates, removed):
     if not updates and not removed:
         return
@@ -233,11 +231,11 @@ def send_email(updates, removed):
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT) as server:
             server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
             server.sendmail(GMAIL_USER, GMAIL_USER, msg.as_string())
-        print("-> Письмо с уведомлением успешно отправлено!")
+        print("-> Уведомление успешно отправлено на почту.")
     except Exception as e:
-        print(f"Ошибка отправки почты: {e}")
+        print(f"Ошибка при отправке письма: {e}")
 
-# --- ОСНОВНОЙ ЦИКЛ ---
+# --- ОСНОВНОЙ ВЫЗОВ ---
 def main():
     watchlist, state = get_gist_data()
     watchlist, state, removed_titles = process_incoming_emails(watchlist, state)
@@ -246,7 +244,7 @@ def main():
     titles_to_remove = []
 
     for title in list(watchlist):
-        print(f"Проверка: {title}...")
+        print(f"Обработка: {title}...")
         data = check_hdrezka(title)
         
         if not data:
@@ -265,19 +263,16 @@ def main():
                 removed_titles.append(f'"{data["title"]}" (получен статус "Завершён")')
 
         elif data["type"] == "movie":
-            # Если фильм вышел в качестве
             updates.append(f'фильм "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
             titles_to_remove.append(title)
             removed_titles.append(f'фильм "{data["title"]}" (вышел в хорошем качестве)')
 
-    # Удаление завершенных/вышедших
     for t in titles_to_remove:
         if t in watchlist:
             watchlist.remove(t)
         if t in state:
             del state[t]
 
-    # Отправка уведомлений и запись в Gist
     send_email(updates, removed_titles)
     update_gist_data(watchlist, state)
 
