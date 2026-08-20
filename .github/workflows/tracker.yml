@@ -1,12 +1,10 @@
 name: HDRezka Tracker Workflow
 
 on:
-  workflow_dispatch: # Триггер для cron-job.org / ручного запуска
-#  schedule:
-#    - cron: '0 */6 * * *' # Автоматический запуск каждые 6 часов (резервный)
+  workflow_dispatch: # Для запуска по кнопке или вызова через cron-job.org API
 
 jobs:
-  build-and-run:
+  run-tracker:
     runs-on: ubuntu-latest
 
     steps:
