@@ -27,4 +27,5 @@ jobs:
           GIST_ID: ${{ secrets.GIST_ID }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TARGET_EMAIL: ${{ secrets.TARGET_EMAIL }}
         run: python parser.py
