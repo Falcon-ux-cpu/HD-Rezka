@@ -63,13 +63,22 @@ def update_gist_data(watchlist, state):
     else:
         print(f"-> Ошибка сохранения Gist: {res.status_code}")
 
-# --- ПРОВЕРКА ПОЧТЫ (IMAP) ---
+# --- ПРОВЕРКА ПОЧТЫ (IMAP ИЗ ЯРЛЫКА rezka) ---
 def process_incoming_emails(watchlist, state):
     removed_titles = []
     try:
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
         mail.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-        mail.select("inbox")
+        
+        # Переход в папку ярлыка rezka (с обработкой кавычек для IMAP)
+        status, _ = mail.select('"rezka"')
+        if status != 'OK':
+            # Фоллбэк, если ярлык вложен в INBOX
+            status, _ = mail.select('"INBOX/rezka"')
+            if status != 'OK':
+                print("❌ Ошибка: Папка/ярлык 'rezka' не найдена в Gmail.")
+                mail.logout()
+                return watchlist, state, removed_titles
 
         # Ищем только непрочитанные письма, отправленные С ВАШЕГО ЛИЧНОГО адреса
         status, messages = mail.search(None, f'(UNSEEN FROM "{TARGET_EMAIL}")')
@@ -101,7 +110,7 @@ def process_incoming_emails(watchlist, state):
                         for item in lines:
                             if item not in watchlist:
                                 watchlist.append(item)
-                                print(f"Добавлено из письма: {item}")
+                                print(f"Добавлено из письма (ярлык rezka): {item}")
                     
                     elif subject == "HDREZKA_REMOVE":
                         for item in lines:
@@ -110,7 +119,7 @@ def process_incoming_emails(watchlist, state):
                                 removed_titles.append(f'"{item}" (по вашей команде)')
                                 if item in state:
                                     del state[item]
-                                print(f"Удалено из письма: {item}")
+                                print(f"Удалено из письма (ярлык rezka): {item}")
 
                     mail.store(e_id, '+FLAGS', '\\Seen')
 
@@ -212,7 +221,7 @@ def send_email(updates, removed):
 
     msg = MIMEMultipart()
     msg["From"] = GMAIL_USER
-    msg["To"] = TARGET_EMAIL  # Отправляем на ваш личный ящик
+    msg["To"] = TARGET_EMAIL
     msg["Subject"] = "HD REZKA"
 
     body_text = ""
