@@ -136,9 +136,16 @@ def process_incoming_emails(watchlist, state):
     return watchlist, state, removed_titles
 
 # --- ПАРСИНГ HDREZKA ---
-def check_hdrezka(title):
+def check_hdrezka(title_raw):
+    # Парсинг года из скобок (например, "Джек Ричер (2022)")
+    year_match = re.search(r"\((19\d{2}|20\d{2})\)", title_raw)
+    target_year = year_match.group(1) if year_match else None
+    
+    # Очистка имени для AJAX-поиска
+    search_query = re.sub(r"\((19\d{2}|20\d{2})\)", "", title_raw).strip()
+
     search_url = f"{BASE_URL}/engine/ajax/search.php"
-    payload = {"q": title}
+    payload = {"q": search_query}
     headers = HEADERS.copy()
     headers["X-Requested-With"] = "XMLHttpRequest"
 
@@ -149,11 +156,23 @@ def check_hdrezka(title):
             return None
 
         soup = BeautifulSoup(res.text, "html.parser")
-        first_item = soup.find("li")
-        if not first_item:
+        items = soup.find_all("li")
+        if not items:
             return None
 
-        link_elem = first_item.find("a")
+        target_item = None
+
+        # Сопоставление по году, если он указан
+        if target_year:
+            for item in items:
+                if target_year in item.text:
+                    target_item = item
+                    break
+
+        if not target_item:
+            target_item = items[0]
+
+        link_elem = target_item.find("a")
         if not link_elem:
             return None
 
@@ -166,15 +185,25 @@ def check_hdrezka(title):
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
         
+        # --- ГЛОБАЛЬНАЯ ПРОВЕРКА СТАТУСА ОЖИДАНИЯ / АНОНСА ---
+        awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
+        if awaiting_elem and ("Ожидаем" in awaiting_elem.text or "Премьера" in awaiting_elem.text):
+            return None
+
+        page_text = page_soup.get_text()
+        if "Ожидаем фильм" in page_text or "Фильм в процессе добавления" in page_text:
+            return None
+
         ru_title_elem = page_soup.find("h1", itemprop="name")
-        ru_title = ru_title_elem.text.strip() if ru_title_elem else title
+        ru_title = ru_title_elem.text.strip() if ru_title_elem else search_query
         
         orig_title_elem = page_soup.find("div", class_="b-post__origtitle", itemprop="alternativeHeadline")
         orig_title = orig_title_elem.text.strip() if orig_title_elem else ""
         
         full_title = f"{ru_title} / {orig_title}" if orig_title else ru_title
 
-        is_series = "/series/" in page_url or "/cartoons/" in page_url or page_soup.find("li", class_="b-simple_season__item")
+        # Фильтрация типов по URL
+        is_series = "/series/" in page_url or "/cartoons/" in page_url
 
         # Сериалы
         if is_series:
@@ -200,12 +229,6 @@ def check_hdrezka(title):
 
         # Фильмы
         else:
-            awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
-            is_awaiting = awaiting_elem and "Ожидаем фильм" in awaiting_elem.text
-
-            if is_awaiting:
-                return None
-
             translator_elem = page_soup.find("li", class_="b-translator__item active") or page_soup.find("li", class_="b-translator__item")
             translator_str = translator_elem.text.strip() if translator_elem else "Дубляж / Лицензия"
 
@@ -217,7 +240,7 @@ def check_hdrezka(title):
             }
 
     except Exception as e:
-        print(f"Ошибка при парсинге '{title}': {e}")
+        print(f"Ошибка при парсинге '{title_raw}': {e}")
         return None
 
 # --- ОТПРАВКА ПИСЬМА (SMTP) ---
@@ -256,7 +279,13 @@ def send_email(updates, removed):
 # --- ОСНОВНОЙ ВЫЗОВ ---
 def main():
     watchlist, state = get_gist_data()
+    print(f"-> Исходный список отслеживания: {watchlist}")
+
+    # Обработка входящих писем
     watchlist, state, removed_titles = process_incoming_emails(watchlist, state)
+    
+    # Синхронизация Gist сразу после IMAP
+    update_gist_data(watchlist, state)
 
     updates = []
     titles_to_remove = []
@@ -292,6 +321,8 @@ def main():
             del state[t]
 
     send_email(updates, removed_titles)
+    
+    # Финальное сохранение
     update_gist_data(watchlist, state)
 
 if __name__ == "__main__":
