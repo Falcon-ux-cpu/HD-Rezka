@@ -19,7 +19,7 @@ GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 TARGET_EMAIL = os.environ.get("TARGET_EMAIL")
 
-BASE_URL = "https://standby-rezka.ag"
+BASE_URL = "https://standby-rezka.tv"
 IMAP_SERVER = "imap.gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
