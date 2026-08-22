@@ -15,15 +15,11 @@ from curl_cffi import requests
 GIST_TOKEN = os.environ.get("GHOST_GIST_TOKEN") or os.environ.get("GH_TOKEN")
 GIST_ID = os.environ.get("GIST_ID")
 
-# Аккаунт-бот (отправитель / проверяемый ящик)
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
-
-# Ваш личный адрес (получатель уведомлений / автор писем управления)
 TARGET_EMAIL = os.environ.get("TARGET_EMAIL")
 
-# Используем актуальное зеркало
-BASE_URL = "https://standby-rezka.tv"
+BASE_URL = "https://standby-rezka.ag"
 IMAP_SERVER = "imap.gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
@@ -48,7 +44,6 @@ def get_gist_data():
         raise Exception(f"Ошибка получения Gist: {res.status_code} | Ответ: {res.text}")
     
     files = res.json()["files"]
-    
     watchlist = json.loads(files["watchlist.json"]["content"]) if "watchlist.json" in files else []
     state = json.loads(files["state.json"]["content"]) if "state.json" in files else {}
     return watchlist, state
@@ -72,7 +67,7 @@ def update_gist_data(watchlist, state):
     else:
         print(f"-> Ошибка сохранения Gist: {res.status_code} | Ответ: {res.text}")
 
-# --- ПРОВЕРКА ПОЧТЫ (IMAP ИЗ ЯРЛЫКА rezka) ---
+# --- ПРОВЕРКА ПОЧТЫ (IMAP) ---
 def process_incoming_emails(watchlist, state):
     removed_titles = []
     try:
@@ -137,11 +132,8 @@ def process_incoming_emails(watchlist, state):
 
 # --- ПАРСИНГ HDREZKA ---
 def check_hdrezka(title_raw):
-    # Парсинг года из скобок (например, "Фонари (2026)")
     year_match = re.search(r"\((19\d{2}|20\d{2})\)", title_raw)
     target_year = year_match.group(1) if year_match else None
-    
-    # Очистка имени для AJAX-поиска
     search_query = re.sub(r"\((19\d{2}|20\d{2})\)", "", title_raw).strip()
 
     search_url = f"{BASE_URL}/engine/ajax/search.php"
@@ -163,8 +155,6 @@ def check_hdrezka(title_raw):
             return None
 
         target_item = None
-
-        # Сопоставление по году, если он указан
         if target_year:
             for item in items:
                 if target_year in item.text:
@@ -188,16 +178,20 @@ def check_hdrezka(title_raw):
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
         
-        # --- ГЛОБАЛЬНАЯ ПРОВЕРКА СТАТУСА ОЖИДАНИЯ / АНОНСА ---
+        # 1. Проверка на явный анонс/ожидание
         awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
         if awaiting_elem and ("Ожидаем" in awaiting_elem.text or "Премьера" in awaiting_elem.text):
-            print(f"  [-] Тайтл '{title_raw}' в статусе анонса/ожидания.")
+            print(f"  [-] '{title_raw}' еще не вышел (статус ожидания).")
             return None
 
         page_text = page_soup.get_text()
         if "Ожидаем фильм" in page_text or "Фильм в процессе добавления" in page_text:
-            print(f"  [-] Фильм '{title_raw}' еще не добавлен.")
+            print(f"  [-] '{title_raw}' еще не вышел.")
             return None
+
+        # 2. Проверка наличия медиа-плеера или доступных источнико
+        player_exists = page_soup.find("div", id="cdnplayer") or page_soup.find("iframe") or page_soup.find("div", id="player")
+        translators_list = page_soup.find_all("li", class_="b-translator__item")
 
         ru_title_elem = page_soup.find("h1", itemprop="name")
         ru_title = ru_title_elem.text.strip() if ru_title_elem else search_query
@@ -207,21 +201,32 @@ def check_hdrezka(title_raw):
         
         full_title = f"{ru_title} / {orig_title}" if orig_title else ru_title
 
-        # Фильтрация типов по URL
         is_series = "/series/" in page_url or "/cartoons/" in page_url or "/animation/" in page_url
 
-        # Сериалы
+        # --- СЕРИАЛЫ ---
         if is_series:
+            # Если нет плеера и нет списка озвучек — сериал не вышел
+            if not player_exists and not translators_list:
+                print(f"  [-] Сериал '{title_raw}' еще не вышел (нет плеера).")
+                return None
+
             completed_elem = page_soup.find("div", class_="b-post__infolast")
             is_completed = completed_elem and "Завершен" in completed_elem.text
 
             season_elem = page_soup.find("li", class_="b-simple_season__item active")
             episode_elem = page_soup.find("li", class_="b-simple_episode__item active") or page_soup.find("li", class_="b-simple_episode__item")
-            translator_elem = page_soup.find("li", class_="b-translator__item active") or page_soup.find("li", class_="b-translator__item")
+
+            # Определение озвучки для сериала
+            active_translator = page_soup.find("li", class_="b-translator__item active")
+            if active_translator:
+                translator_str = active_translator.text.strip()
+            elif translators_list:
+                translator_str = translators_list[0].text.strip()
+            else:
+                translator_str = "Оригинал / Rus"
 
             season_str = season_elem.text.strip() if season_elem else "1 сезон"
             episode_str = episode_elem.text.strip() if episode_elem else "1 серия"
-            translator_str = translator_elem.text.strip() if translator_elem else "Стандартная"
 
             return {
                 "type": "series",
@@ -232,10 +237,20 @@ def check_hdrezka(title_raw):
                 "is_completed": is_completed
             }
 
-        # Фильмы
+        # --- ФИЛЬМЫ ---
         else:
-            translator_elem = page_soup.find("li", class_="b-translator__item active") or page_soup.find("li", class_="b-translator__item")
-            translator_str = translator_elem.text.strip() if translator_elem else "Дубляж / Лицензия"
+            # Для фильмов отсутствие плеера гарантирует, что фильм НЕ вышел
+            if not player_exists:
+                print(f"  [-] Фильм '{title_raw}' еще не вышел (нет плеера на странице).")
+                return None
+
+            active_translator = page_soup.find("li", class_="b-translator__item active")
+            if active_translator:
+                translator_str = active_translator.text.strip()
+            elif translators_list:
+                translator_str = translators_list[0].text.strip()
+            else:
+                translator_str = "Дубляж / Лицензия"
 
             return {
                 "type": "movie",
@@ -261,7 +276,7 @@ def send_email(updates, removed):
     body_text = ""
 
     if updates:
-        body_text += "Найдено:\n"
+        body_text += "Обновления:\n"
         for up in updates:
             body_text += f"- {up}\n"
         body_text += "\n"
@@ -286,10 +301,7 @@ def main():
     watchlist, state = get_gist_data()
     print(f"-> Исходный список отслеживания: {watchlist}")
 
-    # Обработка входящих писем
     watchlist, state, removed_titles = process_incoming_emails(watchlist, state)
-    
-    # Синхронизация Gist сразу после IMAP
     update_gist_data(watchlist, state)
 
     updates = []
@@ -307,24 +319,21 @@ def main():
         if data["type"] == "series":
             current_state_str = f"{data['status']} ({data['translator']})"
             
-            # Если сериала раньше не было в state ИЛИ состояние изменилось
             if last_state != current_state_str:
                 state[title] = current_state_str
-                
-                # Если тайтл абсолютно новый — отправляем уведомление о добавлении
                 if last_state is None:
-                    updates.append(f'Добавлен в отслеживание: {data["status"]} сериала "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
+                    updates.append(f'Взят на отслеживание: "{data["title"]}" ({data["status"]}, озвучка: {data["translator"]}). Ссылка: {data["url"]}')
                 else:
-                    updates.append(f'Новая серия: {data["status"]} сериала "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
+                    updates.append(f'Новая серия: {data["status"]} сериала "{data["title"]}" ({data["translator"]}). Ссылка: {data["url"]}')
             
             if data["is_completed"]:
                 titles_to_remove.append(title)
                 removed_titles.append(f'"{data["title"]}" (получен статус "Завершён")')
 
         elif data["type"] == "movie":
-            updates.append(f'Фильм доступен: "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
+            updates.append(f'Фильм вышел в качестве: "{data["title"]}" ({data["translator"]}). Ссылка: {data["url"]}')
             titles_to_remove.append(title)
-            removed_titles.append(f'Фильм "{data["title"]}" (вышел в качестве)')
+            removed_titles.append(f'Фильм "{data["title"]}" (вышел)')
 
     for t in titles_to_remove:
         if t in watchlist:
@@ -333,8 +342,6 @@ def main():
             del state[t]
 
     send_email(updates, removed_titles)
-    
-    # Финальное сохранение состояния
     update_gist_data(watchlist, state)
 
 if __name__ == "__main__":
