@@ -19,7 +19,6 @@ GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 TARGET_EMAIL = os.environ.get("TARGET_EMAIL")
 
-# Переход на рабочее зеркало .tv
 BASE_URL = "https://standby-rezka.tv"
 IMAP_SERVER = "imap.gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
@@ -179,7 +178,7 @@ def check_hdrezka(title_raw):
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
         
-        # 1. Проверка явных статусов анонса
+        # 1. Проверка текстовых статусов анонса
         awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
         if awaiting_elem and ("Ожидаем" in awaiting_elem.text or "Премьера" in awaiting_elem.text):
             print(f"  [-] '{title_raw}' еще не вышел (статус ожидания).")
@@ -190,15 +189,11 @@ def check_hdrezka(title_raw):
             print(f"  [-] '{title_raw}' еще не вышел.")
             return None
 
-        # 2. Улучшенная проверка видео-плеера и доступных озвучек
-        translators_list = page_soup.find_all("li", class_="b-translator__item")
-        player_exists = (
-            page_soup.find("div", id="cdnplayer") or 
-            page_soup.find("div", id="cdnplayer_html5") or 
-            page_soup.find("div", class_="b-post__video") or 
-            page_soup.find("iframe") or 
-            len(translators_list) > 0
-        )
+        # 2. Поиск блоков элементов
+        translators_container = page_soup.find("ul", id="translators-list")
+        episodes_container = page_soup.find("div", id="simple-episodes-tabs")
+        seasons_container = page_soup.find("ul", id="simple-seasons-tabs")
+        player_exists = page_soup.find("div", id="cdnplayer") or page_soup.find("iframe")
 
         ru_title_elem = page_soup.find("h1", itemprop="name")
         ru_title = ru_title_elem.text.strip() if ru_title_elem else search_query
@@ -210,25 +205,34 @@ def check_hdrezka(title_raw):
 
         is_series = "/series/" in page_url or "/cartoons/" in page_url or "/animation/" in page_url
 
+        # Вспомогательная функция очистки текста озвучки от img и лишних символов
+        def parse_translator_name(li_element):
+            if not li_element:
+                return None
+            if li_element.has_attr("title") and li_element["title"]:
+                return li_element["title"].strip()
+            # Убираем картинки перед взятием текста
+            for img in li_element.find_all("img"):
+                img.decompose()
+            return li_element.get_text().strip()
+
         # --- СЕРИАЛЫ ---
         if is_series:
-            if not player_exists:
-                print(f"  [-] Сериал '{title_raw}' еще не вышел (нет плеера).")
+            # Если нет ни серий, ни озвучек, ни плеера — сериал не доступен
+            if not episodes_container and not translators_container and not player_exists:
+                print(f"  [-] Сериал '{title_raw}' еще не вышел (нет плеера/серий).")
                 return None
 
             completed_elem = page_soup.find("div", class_="b-post__infolast")
             is_completed = completed_elem and "Завершен" in completed_elem.text
 
-            season_elem = page_soup.find("li", class_="b-simple_season__item active")
-            episode_elem = page_soup.find("li", class_="b-simple_episode__item active") or page_soup.find("li", class_="b-simple_episode__item")
+            # Извлечение сезона и серии по классам active
+            season_elem = page_soup.select_one("#simple-seasons-tabs li.b-simple_season__item.active")
+            episode_elem = page_soup.select_one("#simple-episodes-tabs li.b-simple_episode__item.active") or page_soup.select_one("#simple-episodes-tabs li.b-simple_episode__item")
 
-            active_translator = page_soup.find("li", class_="b-translator__item active")
-            if active_translator:
-                translator_str = active_translator.text.strip()
-            elif translators_list:
-                translator_str = translators_list[0].text.strip()
-            else:
-                translator_str = "Оригинал / Rus"
+            # Извлечение активной озвучки из списка #translators-list
+            active_translator_li = page_soup.select_one("#translators-list li.b-translator__item.active") or page_soup.select_one("#translators-list li.b-translator__item")
+            translator_str = parse_translator_name(active_translator_li) or "Стандартная"
 
             season_str = season_elem.text.strip() if season_elem else "1 сезон"
             episode_str = episode_elem.text.strip() if episode_elem else "1 серия"
@@ -244,17 +248,12 @@ def check_hdrezka(title_raw):
 
         # --- ФИЛЬМЫ ---
         else:
-            if not player_exists:
-                print(f"  [-] Фильм '{title_raw}' еще не вышел (нет плеера на странице).")
+            if not player_exists and not translators_container:
+                print(f"  [-] Фильм '{title_raw}' еще не вышел (нет плеера/озвучек).")
                 return None
 
-            active_translator = page_soup.find("li", class_="b-translator__item active")
-            if active_translator:
-                translator_str = active_translator.text.strip()
-            elif translators_list:
-                translator_str = translators_list[0].text.strip()
-            else:
-                translator_str = "Дубляж / Лицензия"
+            active_translator_li = page_soup.select_one("#translators-list li.b-translator__item.active") or page_soup.select_one("#translators-list li.b-translator__item")
+            translator_str = parse_translator_name(active_translator_li) or "Дубляж / Лицензия"
 
             return {
                 "type": "movie",
