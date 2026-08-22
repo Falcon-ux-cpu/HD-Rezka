@@ -19,6 +19,7 @@ GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 TARGET_EMAIL = os.environ.get("TARGET_EMAIL")
 
+# Переход на рабочее зеркало .tv
 BASE_URL = "https://standby-rezka.tv"
 IMAP_SERVER = "imap.gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
@@ -178,7 +179,7 @@ def check_hdrezka(title_raw):
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
         
-        # 1. Проверка на явный анонс/ожидание
+        # 1. Проверка явных статусов анонса
         awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
         if awaiting_elem and ("Ожидаем" in awaiting_elem.text or "Премьера" in awaiting_elem.text):
             print(f"  [-] '{title_raw}' еще не вышел (статус ожидания).")
@@ -189,9 +190,15 @@ def check_hdrezka(title_raw):
             print(f"  [-] '{title_raw}' еще не вышел.")
             return None
 
-        # 2. Проверка наличия медиа-плеера или доступных источнико
-        player_exists = page_soup.find("div", id="cdnplayer") or page_soup.find("iframe") or page_soup.find("div", id="player")
+        # 2. Улучшенная проверка видео-плеера и доступных озвучек
         translators_list = page_soup.find_all("li", class_="b-translator__item")
+        player_exists = (
+            page_soup.find("div", id="cdnplayer") or 
+            page_soup.find("div", id="cdnplayer_html5") or 
+            page_soup.find("div", class_="b-post__video") or 
+            page_soup.find("iframe") or 
+            len(translators_list) > 0
+        )
 
         ru_title_elem = page_soup.find("h1", itemprop="name")
         ru_title = ru_title_elem.text.strip() if ru_title_elem else search_query
@@ -205,8 +212,7 @@ def check_hdrezka(title_raw):
 
         # --- СЕРИАЛЫ ---
         if is_series:
-            # Если нет плеера и нет списка озвучек — сериал не вышел
-            if not player_exists and not translators_list:
+            if not player_exists:
                 print(f"  [-] Сериал '{title_raw}' еще не вышел (нет плеера).")
                 return None
 
@@ -216,7 +222,6 @@ def check_hdrezka(title_raw):
             season_elem = page_soup.find("li", class_="b-simple_season__item active")
             episode_elem = page_soup.find("li", class_="b-simple_episode__item active") or page_soup.find("li", class_="b-simple_episode__item")
 
-            # Определение озвучки для сериала
             active_translator = page_soup.find("li", class_="b-translator__item active")
             if active_translator:
                 translator_str = active_translator.text.strip()
@@ -239,7 +244,6 @@ def check_hdrezka(title_raw):
 
         # --- ФИЛЬМЫ ---
         else:
-            # Для фильмов отсутствие плеера гарантирует, что фильм НЕ вышел
             if not player_exists:
                 print(f"  [-] Фильм '{title_raw}' еще не вышел (нет плеера на странице).")
                 return None
