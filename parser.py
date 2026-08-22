@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 from curl_cffi import requests
 
 # --- СЕКРЕТЫ И НАСТРОЙКИ ---
-GIST_TOKEN = os.environ.get("GHOST_GIST_TOKEN")
+GIST_TOKEN = os.environ.get("GHOST_GIST_TOKEN") or os.environ.get("GH_TOKEN")
 GIST_ID = os.environ.get("GIST_ID")
 
 # Аккаунт-бот (отправитель / проверяемый ящик)
@@ -33,8 +33,6 @@ HEADERS = {
     "Referer": BASE_URL,
 }
 
-session = requests.Session(impersonate="chrome120")
-
 # --- РАБОТА С GIST API ---
 def get_gist_data():
     url = f"https://api.github.com/gists/{GIST_ID}"
@@ -43,7 +41,7 @@ def get_gist_data():
         "Accept": "application/vnd.github+json",
         "User-Agent": "HDRezka-Parser-App"
     }
-    res = requests.get(url, headers=headers)
+    res = requests.get(url, headers=headers, impersonate="chrome120")
     if res.status_code != 200:
         raise Exception(f"Ошибка получения Gist: {res.status_code} | Ответ: {res.text}")
     
@@ -66,7 +64,7 @@ def update_gist_data(watchlist, state):
             "state.json": {"content": json.dumps(state, ensure_ascii=False, indent=2)}
         }
     }
-    res = requests.patch(url, headers=headers, json=payload)
+    res = requests.patch(url, headers=headers, json=payload, impersonate="chrome120")
     if res.status_code == 200:
         print("-> Данные Gist успешно сохранены.")
     else:
@@ -150,14 +148,16 @@ def check_hdrezka(title_raw):
     headers["X-Requested-With"] = "XMLHttpRequest"
 
     try:
-        time.sleep(2)
-        res = session.post(search_url, data=payload, headers=headers, timeout=15)
+        time.sleep(1.5)
+        res = requests.post(search_url, data=payload, headers=headers, impersonate="chrome120", timeout=15)
         if res.status_code != 200:
+            print(f"  [!] Ошибка поиска (HTTP {res.status_code}) для '{title_raw}'")
             return None
 
         soup = BeautifulSoup(res.text, "html.parser")
         items = soup.find_all("li")
         if not items:
+            print(f"  [!] Ничего не найдено через поиск для '{title_raw}'")
             return None
 
         target_item = None
@@ -178,9 +178,10 @@ def check_hdrezka(title_raw):
 
         page_url = link_elem["href"]
         
-        time.sleep(2)
-        page_res = session.get(page_url, headers=HEADERS, timeout=15)
+        time.sleep(1.5)
+        page_res = requests.get(page_url, headers=HEADERS, impersonate="chrome120", timeout=15)
         if page_res.status_code != 200:
+            print(f"  [!] Ошибка загрузки страницы {page_url} (HTTP {page_res.status_code})")
             return None
 
         page_soup = BeautifulSoup(page_res.text, "html.parser")
@@ -188,10 +189,12 @@ def check_hdrezka(title_raw):
         # --- ГЛОБАЛЬНАЯ ПРОВЕРКА СТАТУСА ОЖИДАНИЯ / АНОНСА ---
         awaiting_elem = page_soup.find("div", style=re.compile(r"padding-top:\s*10px"))
         if awaiting_elem and ("Ожидаем" in awaiting_elem.text or "Премьера" in awaiting_elem.text):
+            print(f"  [-] Тайтл '{title_raw}' в статусе анонса/ожидания.")
             return None
 
         page_text = page_soup.get_text()
         if "Ожидаем фильм" in page_text or "Фильм в процессе добавления" in page_text:
+            print(f"  [-] Фильм '{title_raw}' еще не добавлен.")
             return None
 
         ru_title_elem = page_soup.find("h1", itemprop="name")
@@ -203,7 +206,7 @@ def check_hdrezka(title_raw):
         full_title = f"{ru_title} / {orig_title}" if orig_title else ru_title
 
         # Фильтрация типов по URL
-        is_series = "/series/" in page_url or "/cartoons/" in page_url
+        is_series = "/series/" in page_url or "/cartoons/" in page_url or "/animation/" in page_url
 
         # Сериалы
         if is_series:
@@ -301,18 +304,25 @@ def main():
 
         if data["type"] == "series":
             current_state_str = f"{data['status']} ({data['translator']})"
+            
+            # Если сериала раньше не было в state ИЛИ состояние изменилось
             if last_state != current_state_str:
                 state[title] = current_state_str
-                updates.append(f'{data["status"]} сериала "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
+                
+                # Если тайтл абсолютно новый — отправляем уведомление о добавлении
+                if last_state is None:
+                    updates.append(f'Добавлен в отслеживание: {data["status"]} сериала "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
+                else:
+                    updates.append(f'Новая серия: {data["status"]} сериала "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
             
             if data["is_completed"]:
                 titles_to_remove.append(title)
                 removed_titles.append(f'"{data["title"]}" (получен статус "Завершён")')
 
         elif data["type"] == "movie":
-            updates.append(f'фильм "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
+            updates.append(f'Фильм доступен: "{data["title"]}" в озвучке {data["translator"]}. Ссылка: {data["url"]}')
             titles_to_remove.append(title)
-            removed_titles.append(f'фильм "{data["title"]}" (вышел в хорошем качестве)')
+            removed_titles.append(f'Фильм "{data["title"]}" (вышел в качестве)')
 
     for t in titles_to_remove:
         if t in watchlist:
@@ -322,7 +332,7 @@ def main():
 
     send_email(updates, removed_titles)
     
-    # Финальное сохранение
+    # Финальное сохранение состояния
     update_gist_data(watchlist, state)
 
 if __name__ == "__main__":
