@@ -22,13 +22,15 @@ GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD")
 # Ваш личный адрес (получатель уведомлений / автор писем управления)
 TARGET_EMAIL = os.environ.get("TARGET_EMAIL")
 
-BASE_URL = "https://hdrezka.ag"
+# Используем актуальное зеркало
+BASE_URL = "https://standby-rezka.ag"
 IMAP_SERVER = "imap.gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 465
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
     "Referer": BASE_URL,
 }
@@ -135,7 +137,7 @@ def process_incoming_emails(watchlist, state):
 
 # --- ПАРСИНГ HDREZKA ---
 def check_hdrezka(title_raw):
-    # Парсинг года из скобок (например, "Джек Ричер (2022)")
+    # Парсинг года из скобок (например, "Фонари (2026)")
     year_match = re.search(r"\((19\d{2}|20\d{2})\)", title_raw)
     target_year = year_match.group(1) if year_match else None
     
@@ -148,7 +150,7 @@ def check_hdrezka(title_raw):
     headers["X-Requested-With"] = "XMLHttpRequest"
 
     try:
-        time.sleep(1.5)
+        time.sleep(2)
         res = requests.post(search_url, data=payload, headers=headers, impersonate="chrome120", timeout=15)
         if res.status_code != 200:
             print(f"  [!] Ошибка поиска (HTTP {res.status_code}) для '{title_raw}'")
@@ -178,7 +180,7 @@ def check_hdrezka(title_raw):
 
         page_url = link_elem["href"]
         
-        time.sleep(1.5)
+        time.sleep(2)
         page_res = requests.get(page_url, headers=HEADERS, impersonate="chrome120", timeout=15)
         if page_res.status_code != 200:
             print(f"  [!] Ошибка загрузки страницы {page_url} (HTTP {page_res.status_code})")
